@@ -1,17 +1,19 @@
 #
 # Dockerfile for Devcoind
 #
-# version: 0.2.0
+# version: 0.3.0
 #
 
-FROM debian:stretch-slim as builder
-MAINTAINER Fernando Paredes Garcia <fernando@develcuy.com>
+FROM debian:bookworm-slim AS builder
+LABEL org.opencontainers.image.authors="Fernando Paredes Garcia <fernando@develcuy.com>"
 
-# Update packages and install package dependencies
-RUN apt-get update && apt-get install --no-install-recommends -y build-essential ca-certificates libboost-all-dev libssl-dev libz-dev git wget \
+# Update packages and install build dependencies
+RUN apt-get update && apt-get install --no-install-recommends -y git wget ca-certificates \
+                           build-essential libtool autotools-dev automake pkg-config bsdmainutils python3 \
+                           libevent-dev libboost-dev libboost-system-dev libboost-filesystem-dev libboost-test-dev libcurl4-openssl-dev \
     && rm -rf /var/lib/apt/lists/*;
-ENV SRC /usr/local/src
-ENV BDBVER db-4.8.30.NC
+ENV SRC=/usr/local/src
+ENV BDBVER=db-4.8.30.NC
 WORKDIR $SRC
 # Download and Compile Berkeley DB 4.8
 RUN set -ex; \
@@ -30,22 +32,21 @@ RUN set -ex; \
 RUN git clone --depth=1 https://github.com/devcoin/core.git $SRC/devcoin
 # Compile & Install Devcoind
 RUN set -ex; \
-        cd $SRC/devcoin/src; \
-        make -j4 -f makefile.unix USE_UPNP=- BDB_LIB_PATH=$SRC/db4_dest/lib/ BDB_INCLUDE_PATH=$SRC/db4_dest/include/; \
-        strip devcoind; \
-        mv devcoind /usr/local/bin/; \
-        make -f makefile.unix clean
+        cd $SRC/devcoin; \
+        ./autogen.sh; \
+        ./configure  --enable-cxx --disable-shared --with-pic BDB_LIBS="-L$SRC/db4_dest/lib -ldb_cxx-4.8" BDB_CFLAGS="-I$SRC/db4_dest/include"; \
+        make
+RUN set -ex; mkdir /inst; cd $SRC/devcoin; make install-strip DESTDIR=/inst
 
-# Use osixia/light-baseimage
-# https://github.com/osixia/docker-light-baseimage
-FROM osixia/light-baseimage:1.1.2
+FROM emfox/light-baseimage:1.3.4
 
-COPY --from=builder /usr/local/bin/devcoind /usr/local/bin/devcoind
+COPY --from=builder /inst/usr/local /usr/local
 # Update packages and install package dependencies
 RUN apt-get -y update \
     && /container/tool/add-multiple-process-stack \
     && LC_ALL=C DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-       libboost-system1.62.0 libboost-filesystem1.62.0 libboost-program-options1.62.0 libboost-thread1.62.0 \
+           libevent-pthreads-2.1-7 libevent-2.1-7 libcurl4\
+           libboost-system1.74.0 libboost-filesystem1.74.0 libboost-program-options1.74.0 libboost-thread1.74.0 \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
@@ -56,20 +57,22 @@ RUN useradd devcoin; chsh -s /bin/bash devcoin; mkdir -p /home/devcoin/.devcoin
 RUN echo '#Noob config file for devcoind, should be enough!\n\
 server=1\n\
 daemon=0\n\
-rpcuser=devcoind\n\
-rpcpassword=devcoin\n\
-# OpenSSL settings used when rpcssl=1\n\
-rpcsslciphers=TLSv1+HIGH:!SSLv2:!aNULL:!eNULL:!AH:!3DES:@STRENGTH\n\
-rpcsslcertificatechainfile=server.cert\n\
-rpcsslprivatekeyfile=server.pem\n\
+rpcuser=devcoinrpc\n\
+rpcpassword=a_s3cret_password\n\
+addnode=LFM.Knotwork.com\n\
+addnode=Server1.Knotwork.net\n\
+rpcbind=127.0.0.1\n\
+rpcbind=devcoin\n\
+rpcallowip=127.0.0.1/24\n\
+rpcallowip=172.16.0.0/12\n\
 rpcport=52332\n\
-rpcallowip=*\n\
 # Set gen=1 to attempt to generate coins\n\
 gen=0\n\
 # Allow direct connections for the 'pay via IP address' feature.\n\
 allowreceivebyip=1\n\
 # Enable transaction index\n\
 txindex=1\n\
+wallet=wallet\n\
 '\
 > /home/devcoin/.devcoin/devcoin.conf
 RUN chown devcoin: -R /home/devcoin
